@@ -284,9 +284,24 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
         }
         // Display the connected network and wallet for transparency
         logStatus('Connected wallet: ' + address + ' on chain ID ' + (await provider.getNetwork()).chainId);
+        // Show native currency balance for the connected wallet to give users context about their
+        // available funds. We determine the native currency symbol based on the selected network.
+        try {
+          const nativeBalance = await provider.getBalance(address);
+          const nativeSymbol = selectedChainId === '80002' ? 'MATIC' : (selectedChainId === '11155111' ? 'ETH' : 'CELO');
+          const nativeFormatted = ethers.utils.formatUnits(nativeBalance, 18);
+          logStatus('Wallet balance: ' + nativeFormatted + ' ' + nativeSymbol);
+        } catch (balErr) {
+          console.warn('Failed to fetch wallet balance:', balErr);
+        }
         logStatus('Compiling contract... This may take a moment.');
         const source = getContractSource(mintable, burnable);
-        const { abi, bytecode } = await compileContract(source);
+        // Race the compilation against a timeout so the UI doesn\'t hang indefinitely if the
+        // compiler CDN fails. If the timeout fires, an error will be thrown.
+        const compileTimeoutMs = 60000; // 60 seconds
+        const compilePromise = compileContract(source);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Compilation timed out. Please check your internet connection and reload the page.')), compileTimeoutMs));
+        const { abi, bytecode } = await Promise.race([compilePromise, timeoutPromise]);
         logStatus('Compilation successful. Estimating deployment gas and cost...');
         // Estimate gas for deployment and show approximate cost
         try {
@@ -362,6 +377,11 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
       } else {
         addressP.textContent = 'Contract Address: ' + contractAddress;
       }
+      // Add a copy button next to the address for user convenience
+      const copySpan = document.createElement('span');
+      copySpan.className = 'ml-2 inline-flex items-center';
+      copySpan.innerHTML = '<button id="copyAddressBtn" class="text-indigo-600 hover:text-indigo-800 focus:outline-none text-sm">Copy</button>';
+      addressP.appendChild(copySpan);
       postDiv.appendChild(addressP);
       // Supply display
       const supplyP = document.createElement('p');
@@ -493,6 +513,20 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
           } catch (err) {
             console.error(err);
             logStatus('Burn error: ' + (err.message || JSON.stringify(err)));
+          }
+        });
+      }
+
+      // Add copy to clipboard functionality for the contract address
+      const copyBtn = document.getElementById('copyAddressBtn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(contractAddress);
+            logStatus('Contract address copied to clipboard');
+          } catch (copyErr) {
+            console.error(copyErr);
+            logStatus('Failed to copy address: ' + (copyErr.message || JSON.stringify(copyErr)));
           }
         });
       }
