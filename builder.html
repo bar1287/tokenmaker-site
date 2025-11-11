@@ -73,7 +73,16 @@
   <!-- Ethers.js library for interacting with EVM networks. SRI attributes are omitted to prevent mismatch errors. -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
   <!-- BrowserSolc for compiling Solidity in browser -->
-<script src="https://cdn.jsdelivr.net/npm/browser-solc@1.0.0/index.min.js"></script>
+      <!--
+        Use a supported version of browser‑solc. The 0.6.1 release referenced previously
+        doesn't exist on jsDelivr, which caused the global `BrowserSolc` object to be
+        undefined at runtime. Version 1.0.0 is the latest available and exposes
+        `BrowserSolc` on the `window` object once loaded. We reference the
+        bundled `index.min.js` file here. See
+        https://www.jsdelivr.com/package/npm/browser-solc for details.
+      -->
+      <script src="https://cdn.jsdelivr.net/npm/browser-solc@1.0.0/index.min.js"></script>
+
   <script>
     document.getElementById('year').textContent = new Date().getFullYear();
 
@@ -164,20 +173,26 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
     }
 
     async function compileContract(sourceCode) {
-      return new Promise((resolve, reject) => {
-        BrowserSolc.getVersions(function(soljsonSources, soljsonVersions) {
-          const version = soljsonVersions['0.8.20'];
-          BrowserSolc.loadVersion(version, function(compiler) {
-            const compiled = compiler.compile(sourceCode, 1);
-            if (compiled && compiled.contracts && compiled.contracts[':CustomToken']) {
-              const contract = compiled.contracts[':CustomToken'];
-              resolve({ abi: JSON.parse(contract.interface), bytecode: contract.bytecode });
-            } else {
-              reject(compiled);
+        return new Promise((resolve, reject) => {
+            // If the BrowserSolc library hasn't loaded, reject early. This can happen if
+            // the CDN fails to load or the script isn't included on the page.
+            if (typeof BrowserSolc === 'undefined') {
+              reject(new Error('Solidity compiler library (browser-solc) failed to load. Please refresh the page or check network connectivity.'));
+              return;
             }
+            BrowserSolc.getVersions(function(soljsonSources, soljsonVersions) {
+              const version = soljsonVersions['0.8.20'];
+              BrowserSolc.loadVersion(version, function(compiler) {
+                const compiled = compiler.compile(sourceCode, 1);
+                if (compiled && compiled.contracts && compiled.contracts[':CustomToken']) {
+                  const contract = compiled.contracts[':CustomToken'];
+                  resolve({ abi: JSON.parse(contract.interface), bytecode: contract.bytecode });
+                } else {
+                  reject(compiled);
+                }
+              });
+            });
           });
-        });
-      });
     }
 
     async function createToken() {
@@ -209,14 +224,93 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
         // Check if wallet is on the selected network
         const currentNetwork = await provider.getNetwork();
         if (currentNetwork.chainId.toString() !== selectedChainId) {
-          logStatus('Warning: Your wallet is connected to chain ID ' + currentNetwork.chainId + '. Please switch to the selected network (' + selectedChainId + ') and try again.');
-          // We continue anyway, but deployment may fail
+          // Attempt to switch to the selected network automatically. MetaMask may throw
+          // if the network has not been added yet. We define network parameters
+          // for supported testnets here.
+          const networkParams = {
+            '80002': {
+              chainId: '0x13882',
+              chainName: 'Polygon Amoy',
+              nativeCurrency: { name: 'MATIC', symbol: 'MATIC', decimals: 18 },
+              rpcUrls: ['https://rpc-amoy.polygon.technology'],
+              blockExplorerUrls: ['https://amoy.polygonscan.com']
+            },
+            '11155111': {
+              chainId: '0xAA36A7',
+              chainName: 'Ethereum Sepolia',
+              nativeCurrency: { name: 'Sepolia ETH', symbol: 'SepoliaETH', decimals: 18 },
+              rpcUrls: ['https://rpc.sepolia.org'],
+              blockExplorerUrls: ['https://sepolia.etherscan.io']
+            },
+            '44787': {
+              chainId: '0xAEEF',
+              chainName: 'Celo Alfajores',
+              nativeCurrency: { name: 'CELO', symbol: 'CELO', decimals: 18 },
+              rpcUrls: ['https://alfajores-forno.celo-testnet.org'],
+              blockExplorerUrls: ['https://explorer.celo.org/alfajores']
+            }
+          };
+          logStatus('Warning: Your wallet is connected to chain ID ' + currentNetwork.chainId + '. Attempting to switch to the selected network (' + selectedChainId + ')...');
+          const targetParams = networkParams[selectedChainId];
+          if (targetParams) {
+            try {
+              // Request a network switch (wallet must support wallet_switchEthereumChain)
+              await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: targetParams.chainId }]
+              });
+              logStatus('Network switched successfully.');
+            } catch (switchError) {
+              // 4902 means the chain has not been added to the wallet yet
+              if (switchError.code === 4902 || (switchError.data && switchError.data.originalError && switchError.data.originalError.code === 4902)) {
+                try {
+                  await window.ethereum.request({
+                    method: 'wallet_addEthereumChain',
+                    params: [targetParams]
+                  });
+                  logStatus('Network added and switched automatically.');
+                } catch (addError) {
+                  console.error(addError);
+                  logStatus('Please add the selected network to your wallet manually and try again.');
+                }
+              } else {
+                console.error(switchError);
+                logStatus('Automatic network switch failed: ' + (switchError.message || JSON.stringify(switchError)));
+              }
+            }
+          } else {
+            logStatus('Selected network parameters not found. Please switch networks in your wallet.');
+          }
         }
-        logStatus('Connected wallet: ' + address);
+        // Display the connected network and wallet for transparency
+        logStatus('Connected wallet: ' + address + ' on chain ID ' + (await provider.getNetwork()).chainId);
         logStatus('Compiling contract... This may take a moment.');
         const source = getContractSource(mintable, burnable);
         const { abi, bytecode } = await compileContract(source);
-        logStatus('Compilation successful. Deploying contract...');
+        logStatus('Compilation successful. Estimating deployment gas and cost...');
+        // Estimate gas for deployment and show approximate cost
+        try {
+          const factory = new ethers.ContractFactory(abi, '0x' + bytecode, signer);
+          const deployTx = await factory.getDeployTransaction(name, symbol, decimals, parseInt(supply));
+          const gasEstimate = await provider.estimateGas(deployTx);
+          const feeData = await provider.getFeeData();
+          // Use maxFeePerGas or gasPrice depending on network support
+          const gasPrice = feeData.maxFeePerGas || feeData.gasPrice;
+          if (gasPrice) {
+            const cost = gasPrice.mul(gasEstimate);
+            // Determine symbol for native currency based on selected network
+            const currencySymbol = selectedChainId === '80002' ? 'MATIC' : (selectedChainId === '11155111' ? 'ETH' : 'CELO');
+            const costFormatted = ethers.utils.formatUnits(cost, 18);
+            logStatus('Estimated gas for deployment: ' + gasEstimate.toString() + ' units');
+            logStatus('Estimated cost: ~' + costFormatted + ' ' + currencySymbol + ' (may vary)');
+          } else {
+            logStatus('Gas price unavailable; cost estimate not shown.');
+          }
+        } catch (e) {
+          console.warn('Gas estimate failed:', e);
+          logStatus('Unable to estimate gas cost (may still deploy)');
+        }
+        logStatus('Deploying contract...');
         const factory = new ethers.ContractFactory(abi, '0x' + bytecode, signer);
         // Deploy contract with constructor params
         const contract = await factory.deploy(name, symbol, decimals, parseInt(supply));
@@ -317,6 +411,40 @@ ${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     
       if (formsContainer.children.length > 0) {
         postDiv.appendChild(formsContainer);
       }
+
+      // Add balance check form. Always show, regardless of mint/burn options.
+      const balanceDiv = document.createElement('div');
+      balanceDiv.className = 'p-4 bg-gray-50 border rounded';
+      balanceDiv.innerHTML = `
+        <h4 class="font-semibold mb-2">Check Token Balance</h4>
+        <div class="mb-2">
+          <label class="block text-gray-700 text-sm mb-1" for="balanceAddress">Address</label>
+          <input type="text" id="balanceAddress" class="w-full border rounded px-3 py-2" placeholder="0x..." />
+        </div>
+        <button id="balanceBtn" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Check Balance</button>
+        <p id="balanceResult" class="mt-2 text-gray-700"></p>
+      `;
+      postDiv.appendChild(balanceDiv);
+
+      // Event listener for checking balances
+      document.getElementById('balanceBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const addr = document.getElementById('balanceAddress').value.trim();
+        const resultP = document.getElementById('balanceResult');
+        resultP.textContent = '';
+        if (!addr) {
+          alert('Please enter an address');
+          return;
+        }
+        try {
+          const bal = await window.deployedContract.balanceOf(addr);
+          const formatted = ethers.utils.formatUnits(bal, window.tokenDecimals);
+          resultP.textContent = 'Balance: ' + formatted;
+        } catch (err) {
+          console.error(err);
+          resultP.textContent = 'Error fetching balance: ' + (err.message || JSON.stringify(err));
+        }
+      });
       // Attach event listeners for mint/burn
       if (window.tokenAllowMint) {
         document.getElementById('mintBtn').addEventListener('click', async (e) => {
