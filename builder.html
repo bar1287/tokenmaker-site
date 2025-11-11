@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Create Token - TokenMaker</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <header class="bg-white shadow">
+    <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-indigo-600"><a href="index.html">TokenMaker</a></h1>
+      <nav>
+        <a href="index.html" class="text-indigo-600 hover:text-indigo-800 font-medium">Home</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 py-16">
+    <h2 class="text-3xl font-bold mb-4">Create your ERC-20 token</h2>
+    <p class="text-gray-600 mb-8">Fill in the details below and deploy your token directly from your browser.</p>
+
+    <div class="bg-white p-6 rounded-lg shadow">
+      <div class="grid gap-4 md:grid-cols-2">
+        <div>
+          <label class="block text-gray-700 font-medium mb-1" for="tokenName">Token Name</label>
+          <input type="text" id="tokenName" class="w-full border rounded px-3 py-2" placeholder="MyToken">
+        </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-1" for="tokenSymbol">Symbol</label>
+          <input type="text" id="tokenSymbol" class="w-full border rounded px-3 py-2" placeholder="MTK">
+        </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-1" for="tokenSupply">Total Supply</label>
+          <input type="number" id="tokenSupply" class="w-full border rounded px-3 py-2" placeholder="1000000">
+        </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-1" for="decimals">Decimals</label>
+          <input type="number" id="decimals" class="w-full border rounded px-3 py-2" placeholder="18" value="18">
+        </div>
+      </div>
+      <div class="mt-4 flex items-center">
+        <input type="checkbox" id="mintable" class="mr-2">
+        <label for="mintable" class="text-gray-700">Allow Minting (owner only)</label>
+      </div>
+      <div class="mt-6">
+        <button id="createBtn" class="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">Create Token</button>
+      </div>
+      <div id="status" class="mt-4 p-4 bg-gray-100 rounded text-sm overflow-auto" style="max-height: 300px;"></div>
+    </div>
+  </main>
+
+  <footer class="bg-gray-100 py-6">
+    <div class="max-w-5xl mx-auto px-4 text-center text-gray-500">
+      © <span id="year"></span> TokenMaker. All rights reserved.
+    </div>
+  </footer>
+
+  <!-- Load external libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js" integrity="sha512-rjUQW5VeaVJDDKHOBHD7kuo7cMZwj8DK8qSJCIXxOTD2aYQzFgSk71aflYmyf1EPx/0Rw9B6m4rPs3NfffBvyA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- BrowserSolc for compiling Solidity in browser -->
+  <script src="https://cdn.jsdelivr.net/npm/browser-solc@0.6.1/browser-solc.min.js"></script>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    const statusEl = document.getElementById('status');
+
+    function logStatus(message) {
+      const p = document.createElement('p');
+      p.textContent = message;
+      statusEl.appendChild(p);
+      statusEl.scrollTop = statusEl.scrollHeight;
+    }
+
+    // Solidity source for customizable ERC-20 token
+    function getContractSource(allowMinting) {
+      return `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract CustomToken {
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+    address public owner;
+
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+
+    constructor(string memory _name, string memory _symbol, uint8 _decimals, uint256 initialSupply) {
+        name = _name;
+        symbol = _symbol;
+        decimals = _decimals;
+        owner = msg.sender;
+        uint256 supplyWithDecimals = initialSupply * (10 ** uint256(decimals));
+        totalSupply = supplyWithDecimals;
+        balances[msg.sender] = supplyWithDecimals;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call");
+        _;
+    }
+
+    function balanceOf(address account) public view returns (uint256) {
+        return balances[account];
+    }
+
+    function transfer(address to, uint256 amount) public returns (bool) {
+        require(to != address(0), "Invalid address");
+        require(balances[msg.sender] >= amount, "Insufficient balance");
+        balances[msg.sender] -= amount;
+        balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) public returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function allowance(address _owner, address spender) public view returns (uint256) {
+        return allowances[_owner][spender];
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        require(to != address(0), "Invalid address");
+        require(balances[from] >= amount, "Insufficient balance");
+        require(allowances[from][msg.sender] >= amount, "Allowance exceeded");
+        balances[from] -= amount;
+        balances[to] += amount;
+        allowances[from][msg.sender] -= amount;
+        emit Transfer(from, to, amount);
+        return true;
+    }
+
+${allowMinting ? '    function mint(address to, uint256 amount) public onlyOwner {\n        require(to != address(0), "Invalid address");\n        uint256 amountWithDecimals = amount * (10 ** uint256(decimals));\n        totalSupply += amountWithDecimals;\n        balances[to] += amountWithDecimals;\n        emit Transfer(address(0), to, amountWithDecimals);\n    }\n' : ''}
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}`;
+    }
+
+    async function compileContract(sourceCode) {
+      return new Promise((resolve, reject) => {
+        BrowserSolc.getVersions(function(soljsonSources, soljsonVersions) {
+          const version = soljsonVersions['0.8.20'];
+          BrowserSolc.loadVersion(version, function(compiler) {
+            const compiled = compiler.compile(sourceCode, 1);
+            if (compiled && compiled.contracts && compiled.contracts[':CustomToken']) {
+              const contract = compiled.contracts[':CustomToken'];
+              resolve({ abi: JSON.parse(contract.interface), bytecode: contract.bytecode });
+            } else {
+              reject(compiled);
+            }
+          });
+        });
+      });
+    }
+
+    async function createToken() {
+      statusEl.innerHTML = '';
+      try {
+        const name = document.getElementById('tokenName').value.trim();
+        const symbol = document.getElementById('tokenSymbol').value.trim();
+        const supply = document.getElementById('tokenSupply').value.trim();
+        const decimals = parseInt(document.getElementById('decimals').value.trim());
+        const mintable = document.getElementById('mintable').checked;
+        if (!name || !symbol || !supply) {
+          alert('Please fill in all fields');
+          return;
+        }
+        logStatus('Requesting wallet connection...');
+        if (!window.ethereum) {
+          alert('MetaMask or compatible wallet is required');
+          return;
+        }
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send('eth_requestAccounts', []);
+        const signer = provider.getSigner();
+        const address = await signer.getAddress();
+        logStatus('Connected wallet: ' + address);
+        logStatus('Compiling contract... This may take a moment.');
+        const source = getContractSource(mintable);
+        const { abi, bytecode } = await compileContract(source);
+        logStatus('Compilation successful. Deploying contract...');
+        const factory = new ethers.ContractFactory(abi, '0x' + bytecode, signer);
+        const contract = await factory.deploy(name, symbol, decimals, parseInt(supply));
+        logStatus('Transaction sent. Waiting for confirmation...');
+        await contract.deployed();
+        logStatus('Token deployed! Contract address: ' + contract.address);
+        logStatus('View on explorer by pasting address in your network explorer (e.g., Etherscan, PolygonScan).');
+      } catch (err) {
+        console.error(err);
+        logStatus('Error: ' + (err.message || JSON.stringify(err)));
+      }
+    }
+
+    document.getElementById('createBtn').addEventListener('click', createToken);
+  </script>
+</body>
+</html>

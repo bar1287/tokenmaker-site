@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TokenMaker - Create ERC-20 Token</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <header class="bg-white shadow">
+    <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-indigo-600">TokenMaker</h1>
+      <nav>
+        <a href="builder.html" class="text-indigo-600 hover:text-indigo-800 font-medium">Create Token</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-16">
+    <section class="text-center">
+      <h2 class="text-4xl font-bold mb-4">Create your ERC-20 token in minutes</h2>
+      <p class="text-lg text-gray-600 mb-8">No coding, no hassle. Deploy your own cryptocurrency token directly from your browser.</p>
+      <a href="builder.html" class="px-6 py-3 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 transition">Get Started</a>
+    </section>
+
+    <section class="mt-16 grid md:grid-cols-3 gap-8">
+      <div class="bg-white p-6 rounded-lg shadow">
+        <h3 class="text-xl font-semibold mb-2">Easy Setup</h3>
+        <p>Provide basic details like token name, symbol, and supply. Our tool takes care of the rest.</p>
+      </div>
+      <div class="bg-white p-6 rounded-lg shadow">
+        <h3 class="text-xl font-semibold mb-2">Secure &amp; Trustless</h3>
+        <p>Tokens are deployed on-chain with your own wallet. You retain full ownership and control.</p>
+      </div>
+      <div class="bg-white p-6 rounded-lg shadow">
+        <h3 class="text-xl font-semibold mb-2">Custom Features</h3>
+        <p>Add minting capability and customize decimals to suit your project's needs.</p>
+      </div>
+    </section>
+
+    <section class="mt-16 text-center">
+      <h3 class="text-2xl font-bold mb-4">Ready to launch your token?</h3>
+      <a href="builder.html" class="px-6 py-3 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 transition">Build Now</a>
+    </section>
+  </main>
+
+  <footer class="bg-gray-100 py-6">
+    <div class="max-w-5xl mx-auto px-4 text-center text-gray-500">
+      © <span id="year"></span> TokenMaker. All rights reserved.
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
