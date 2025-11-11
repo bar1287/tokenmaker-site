@@ -38,15 +38,28 @@
           <label class="block text-gray-700 font-medium mb-1" for="decimals">Decimals</label>
           <input type="number" id="decimals" class="w-full border rounded px-3 py-2" placeholder="18" value="18">
         </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-1" for="network">Network</label>
+          <select id="network" class="w-full border rounded px-3 py-2">
+            <option value="80002">Polygon Amoy (Testnet)</option>
+            <option value="11155111">Ethereum Sepolia</option>
+            <option value="44787">Celo Alfajores</option>
+          </select>
+        </div>
       </div>
       <div class="mt-4 flex items-center">
         <input type="checkbox" id="mintable" class="mr-2">
         <label for="mintable" class="text-gray-700">Allow Minting (owner only)</label>
       </div>
+      <div class="mt-2 flex items-center">
+        <input type="checkbox" id="burnable" class="mr-2">
+        <label for="burnable" class="text-gray-700">Allow Burning (owner only)</label>
+      </div>
       <div class="mt-6">
         <button id="createBtn" class="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">Create Token</button>
       </div>
       <div id="status" class="mt-4 p-4 bg-gray-100 rounded text-sm overflow-auto" style="max-height: 300px;"></div>
+      <div id="postDeploy" class="mt-6"></div>
     </div>
   </main>
 
@@ -57,7 +70,8 @@
   </footer>
 
   <!-- Load external libraries -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js" integrity="sha512-rjUQW5VeaVJDDKHOBHD7kuo7cMZwj8DK8qSJCIXxOTD2aYQzFgSk71aflYmyf1EPx/0Rw9B6m4rPs3NfffBvyA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- Ethers.js library for interacting with EVM networks. SRI attributes are omitted to prevent mismatch errors. -->
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
   <!-- BrowserSolc for compiling Solidity in browser -->
   <script src="https://cdn.jsdelivr.net/npm/browser-solc@0.6.1/browser-solc.min.js"></script>
 
@@ -74,7 +88,14 @@
     }
 
     // Solidity source for customizable ERC-20 token
-    function getContractSource(allowMinting) {
+    /**
+     * Build the Solidity source code for the CustomToken contract.
+     *
+     * @param {boolean} allowMinting Whether to include a mint function
+     * @param {boolean} allowBurning Whether to include a burn function
+     * @returns {string} Solidity source code
+     */
+    function getContractSource(allowMinting, allowBurning) {
       return `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -137,7 +158,7 @@ contract CustomToken {
         return true;
     }
 
-${allowMinting ? '    function mint(address to, uint256 amount) public onlyOwner {\n        require(to != address(0), "Invalid address");\n        uint256 amountWithDecimals = amount * (10 ** uint256(decimals));\n        totalSupply += amountWithDecimals;\n        balances[to] += amountWithDecimals;\n        emit Transfer(address(0), to, amountWithDecimals);\n    }\n' : ''}
+${allowMinting ? '    /**\n     * Mint new tokens to a specified address.\n     * @param to Receiver of the minted tokens\n     * @param amount Number of whole tokens to mint (without decimals)\n     */\n    function mint(address to, uint256 amount) public onlyOwner {\n        require(to != address(0), "Invalid address");\n        uint256 amountWithDecimals = amount * (10 ** uint256(decimals));\n        totalSupply += amountWithDecimals;\n        balances[to] += amountWithDecimals;\n        emit Transfer(address(0), to, amountWithDecimals);\n    }\n' : ''}${allowBurning ? '    /**\n     * Burn tokens from a specified address.\n     * @param from Address whose tokens will be burned\n     * @param amount Number of whole tokens to burn (without decimals)\n     */\n    function burn(address from, uint256 amount) public onlyOwner {\n        require(from != address(0), "Invalid address");\n        uint256 amountWithDecimals = amount * (10 ** uint256(decimals));\n        require(balances[from] >= amountWithDecimals, "Insufficient balance to burn");\n        balances[from] -= amountWithDecimals;\n        totalSupply -= amountWithDecimals;\n        emit Transfer(from, address(0), amountWithDecimals);\n    }\n' : ''}
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }`;
@@ -161,13 +182,18 @@ ${allowMinting ? '    function mint(address to, uint256 amount) public onlyOwner
     }
 
     async function createToken() {
+      // Reset status and post-deploy content
       statusEl.innerHTML = '';
+      document.getElementById('postDeploy').innerHTML = '';
       try {
+        // Read input values
         const name = document.getElementById('tokenName').value.trim();
         const symbol = document.getElementById('tokenSymbol').value.trim();
         const supply = document.getElementById('tokenSupply').value.trim();
         const decimals = parseInt(document.getElementById('decimals').value.trim());
         const mintable = document.getElementById('mintable').checked;
+        const burnable = document.getElementById('burnable').checked;
+        const selectedChainId = document.getElementById('network').value;
         if (!name || !symbol || !supply) {
           alert('Please fill in all fields');
           return;
@@ -181,20 +207,167 @@ ${allowMinting ? '    function mint(address to, uint256 amount) public onlyOwner
         await provider.send('eth_requestAccounts', []);
         const signer = provider.getSigner();
         const address = await signer.getAddress();
+        // Check if wallet is on the selected network
+        const currentNetwork = await provider.getNetwork();
+        if (currentNetwork.chainId.toString() !== selectedChainId) {
+          logStatus('Warning: Your wallet is connected to chain ID ' + currentNetwork.chainId + '. Please switch to the selected network (' + selectedChainId + ') and try again.');
+          // We continue anyway, but deployment may fail
+        }
         logStatus('Connected wallet: ' + address);
         logStatus('Compiling contract... This may take a moment.');
-        const source = getContractSource(mintable);
+        const source = getContractSource(mintable, burnable);
         const { abi, bytecode } = await compileContract(source);
         logStatus('Compilation successful. Deploying contract...');
         const factory = new ethers.ContractFactory(abi, '0x' + bytecode, signer);
+        // Deploy contract with constructor params
         const contract = await factory.deploy(name, symbol, decimals, parseInt(supply));
         logStatus('Transaction sent. Waiting for confirmation...');
         await contract.deployed();
         logStatus('Token deployed! Contract address: ' + contract.address);
-        logStatus('View on explorer by pasting address in your network explorer (e.g., Etherscan, PolygonScan).');
+        // Build explorer link based on selected chain
+        const explorers = {
+          '80002': 'https://amoy.polygonscan.com/address/',
+          '11155111': 'https://sepolia.etherscan.io/address/',
+          '44787': 'https://explorer.celo.org/alfajores/address/'
+        };
+        const explorerLink = explorers[selectedChainId] ? explorers[selectedChainId] + contract.address : '';
+        // Save references for later actions
+        window.deployedContract = contract;
+        window.tokenDecimals = decimals;
+        window.tokenAllowMint = mintable;
+        window.tokenAllowBurn = burnable;
+        // Render post-deployment UI
+        renderPostDeploy(contract.address, explorerLink, supply);
       } catch (err) {
         console.error(err);
         logStatus('Error: ' + (err.message || JSON.stringify(err)));
+      }
+    }
+
+    /**
+     * Render the post‑deployment user interface.
+     * Displays the contract address with an explorer link and, if enabled,
+     * provides forms for minting and burning tokens.
+     *
+     * @param {string} contractAddress The deployed contract address
+     * @param {string} explorerLink A link to view the contract on a block explorer (if available)
+     * @param {string} initialSupply The initial token supply without decimals
+     */
+    function renderPostDeploy(contractAddress, explorerLink, initialSupply) {
+      const postDiv = document.getElementById('postDeploy');
+      postDiv.innerHTML = '';
+      // Header
+      const header = document.createElement('h3');
+      header.className = 'text-xl font-semibold mb-2';
+      header.textContent = 'Token Deployed Successfully';
+      postDiv.appendChild(header);
+      // Contract address and explorer link
+      const addressP = document.createElement('p');
+      addressP.className = 'mb-2';
+      if (explorerLink) {
+        addressP.innerHTML = 'Contract Address: <a href="' + explorerLink + '" target="_blank" class="text-indigo-600 underline">' + contractAddress + '</a>';
+      } else {
+        addressP.textContent = 'Contract Address: ' + contractAddress;
+      }
+      postDiv.appendChild(addressP);
+      // Supply display
+      const supplyP = document.createElement('p');
+      supplyP.className = 'mb-4';
+      supplyP.innerHTML = 'Total Supply: <span id="totalSupplyDisplay">' + initialSupply + '</span> (without decimals)';
+      postDiv.appendChild(supplyP);
+      // Container for action forms
+      const formsContainer = document.createElement('div');
+      formsContainer.className = 'space-y-4';
+      // Mint form
+      if (window.tokenAllowMint) {
+        const mintForm = document.createElement('div');
+        mintForm.className = 'p-4 bg-gray-50 border rounded';
+        mintForm.innerHTML = `
+          <h4 class="font-semibold mb-2">Mint Tokens</h4>
+          <div class="mb-2">
+            <label class="block text-gray-700 text-sm mb-1" for="mintTo">Recipient Address</label>
+            <input type="text" id="mintTo" class="w-full border rounded px-3 py-2" placeholder="0x...">
+          </div>
+          <div class="mb-2">
+            <label class="block text-gray-700 text-sm mb-1" for="mintAmount">Amount</label>
+            <input type="number" id="mintAmount" class="w-full border rounded px-3 py-2" placeholder="1000">
+          </div>
+          <button id="mintBtn" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Mint</button>
+        `;
+        formsContainer.appendChild(mintForm);
+      }
+      // Burn form
+      if (window.tokenAllowBurn) {
+        const burnForm = document.createElement('div');
+        burnForm.className = 'p-4 bg-gray-50 border rounded';
+        burnForm.innerHTML = `
+          <h4 class="font-semibold mb-2">Burn Tokens</h4>
+          <div class="mb-2">
+            <label class="block text-gray-700 text-sm mb-1" for="burnFrom">Address to Burn From</label>
+            <input type="text" id="burnFrom" class="w-full border rounded px-3 py-2" placeholder="0x...">
+          </div>
+          <div class="mb-2">
+            <label class="block text-gray-700 text-sm mb-1" for="burnAmount">Amount</label>
+            <input type="number" id="burnAmount" class="w-full border rounded px-3 py-2" placeholder="1000">
+          </div>
+          <button id="burnBtn" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">Burn</button>
+        `;
+        formsContainer.appendChild(burnForm);
+      }
+      // Append forms if any
+      if (formsContainer.children.length > 0) {
+        postDiv.appendChild(formsContainer);
+      }
+      // Attach event listeners for mint/burn
+      if (window.tokenAllowMint) {
+        document.getElementById('mintBtn').addEventListener('click', async (e) => {
+          e.preventDefault();
+          const to = document.getElementById('mintTo').value.trim();
+          const amount = document.getElementById('mintAmount').value.trim();
+          if (!to || !amount) {
+            alert('Please fill in recipient and amount');
+            return;
+          }
+          try {
+            // amount is provided as whole tokens (without decimals). The contract
+            // multiplies by decimals internally, so we pass the raw amount.
+            const tx = await window.deployedContract.mint(to, amount);
+            logStatus('Mint transaction sent...');
+            await tx.wait();
+            logStatus('Mint successful');
+            // update supply display by reading from contract
+            const newTotal = await window.deployedContract.totalSupply();
+            const updated = ethers.utils.formatUnits(newTotal, window.tokenDecimals);
+            document.getElementById('totalSupplyDisplay').textContent = updated;
+          } catch (err) {
+            console.error(err);
+            logStatus('Mint error: ' + (err.message || JSON.stringify(err)));
+          }
+        });
+      }
+      if (window.tokenAllowBurn) {
+        document.getElementById('burnBtn').addEventListener('click', async (e) => {
+          e.preventDefault();
+          const from = document.getElementById('burnFrom').value.trim();
+          const amount = document.getElementById('burnAmount').value.trim();
+          if (!from || !amount) {
+            alert('Please fill in address and amount');
+            return;
+          }
+          try {
+            const tx = await window.deployedContract.burn(from, amount);
+            logStatus('Burn transaction sent...');
+            await tx.wait();
+            logStatus('Burn successful');
+            // update supply display
+            const newTotal = await window.deployedContract.totalSupply();
+            const updated = ethers.utils.formatUnits(newTotal, window.tokenDecimals);
+            document.getElementById('totalSupplyDisplay').textContent = updated;
+          } catch (err) {
+            console.error(err);
+            logStatus('Burn error: ' + (err.message || JSON.stringify(err)));
+          }
+        });
       }
     }
 
